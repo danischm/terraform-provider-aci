@@ -51,6 +51,16 @@ func resourceAciRest() *schema.Resource {
 				Type:     schema.TypeString,
 				Optional: true,
 			},
+			"managed": &schema.Schema{
+				Type:     schema.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
+			"state_ignore_attributes": &schema.Schema{
+				Type:     schema.TypeSet,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+				Optional: true,
+			},
 		},
 	}
 }
@@ -99,6 +109,10 @@ func resourceAciRestUpdate(d *schema.ResourceData, m interface{}) error {
 }
 
 func resourceAciRestRead(d *schema.ResourceData, m interface{}) error {
+	if !d.Get("managed").(bool) {
+		return nil
+	}
+
 	log.Printf("[DEBUG] %s: Beginning Read", d.Id())
 
 	if content, ok := d.GetOk("content"); ok {
@@ -107,15 +121,30 @@ func resourceAciRestRead(d *schema.ResourceData, m interface{}) error {
 		className := d.Get("class_name").(string)
 		cont, _ := aciClient.GetViaURL(path)
 
+		ignoreAttr := d.Get("state_ignore_attributes")
+		ignoreAttrList := toStringList(ignoreAttr.(*schema.Set).List())
+
 		if cont.Search("imdata", className) == nil {
+			d.Set("content", make(map[string]interface{}))
 			return nil
 		}
 
 		contentStrMap := toStrMap(content.(map[string]interface{}))
 		newContent := make(map[string]interface{})
 
-		for key := range contentStrMap {
-			newContent[key] = models.StripQuotes(models.StripSquareBrackets(cont.Search("imdata", className, "attributes", key).String()))
+		for key, value := range contentStrMap {
+			ignore_found := false
+			for _, ignoreAttr := range ignoreAttrList {
+				if ignoreAttr == key {
+					ignore_found = true
+					break
+				}
+			}
+			if ignore_found {
+				newContent[key] = value
+			} else {
+				newContent[key] = models.StripQuotes(models.StripSquareBrackets(cont.Search("imdata", className, "attributes", key).String()))
+			}
 		}
 		d.Set("content", newContent)
 	}
