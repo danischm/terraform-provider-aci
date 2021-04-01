@@ -3,6 +3,7 @@ package aci
 import (
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/ciscoecosystem/aci-go-client/client"
 	"github.com/ciscoecosystem/aci-go-client/container"
@@ -62,10 +63,12 @@ func resourceAciRestCreate(d *schema.ResourceData, m interface{}) error {
 	dn := models.StripQuotes(models.StripSquareBrackets(cont.Search(className, "attributes", "dn").String()))
 
 	if dn == "{}" {
-		d.SetId(GetDN(d, m))
-
+		dn, err := GetDN(d, m)
+		if err != nil {
+			return err
+		}
+		d.SetId(dn)
 	} else {
-
 		d.SetId(dn)
 	}
 	return resourceAciRestRead(d, m)
@@ -81,10 +84,12 @@ func resourceAciRestUpdate(d *schema.ResourceData, m interface{}) error {
 	className := classNameIntf.(string)
 	dn := models.StripQuotes(models.StripSquareBrackets(cont.Search(className, "attributes", "dn").String()))
 	if dn == "{}" {
-		d.SetId(GetDN(d, m))
-
+		dn, err := GetDN(d, m)
+		if err != nil {
+			return err
+		}
+		d.SetId(dn)
 	} else {
-
 		d.SetId(dn)
 	}
 
@@ -92,25 +97,53 @@ func resourceAciRestUpdate(d *schema.ResourceData, m interface{}) error {
 }
 
 func resourceAciRestRead(d *schema.ResourceData, m interface{}) error {
+	log.Printf("[DEBUG] %s: Beginning Read", d.Id())
+
+	if content, ok := d.GetOk("content"); ok {
+		aciClient := m.(*client.Client)
+		path := d.Get("path").(string)
+		className := d.Get("class_name").(string)
+		cont, _ := aciClient.GetViaURL(path)
+
+		if cont.Search("imdata", className) == nil {
+			return nil
+		}
+
+		contentStrMap := toStrMap(content.(map[string]interface{}))
+		newContent := make(map[string]interface{})
+
+		for key := range contentStrMap {
+			newContent[key] = models.StripQuotes(models.StripSquareBrackets(cont.Search("imdata", className, "attributes", key).String()))
+		}
+		d.Set("content", newContent)
+	}
+
+	log.Printf("[DEBUG] %s: Read finished successfully", d.Id())
+
 	return nil
 }
 
 func resourceAciRestDelete(d *schema.ResourceData, m interface{}) error {
-	_, err := PostAndSetStatus(d, m, Deleted)
+	cont, err := PostAndSetStatus(d, m, Deleted)
 	if err != nil {
+		errCode := models.StripQuotes(models.StripSquareBrackets(cont.Search("imdata", "error", "attributes", "code").String()))
+		// Ignore errors of type "Cannot delete object of class"
+		if errCode == "107" {
+			return nil
+		}
 		return err
 	}
 	d.SetId("")
 	return nil
 }
 
-func GetDN(d *schema.ResourceData, m interface{}) string {
+func GetDN(d *schema.ResourceData, m interface{}) (string, error) {
 	aciClient := m.(*client.Client)
 	path := d.Get("path").(string)
 	className := d.Get("class_name").(string)
-	cont, _ := aciClient.GetViaURL(path)
+	cont, err := aciClient.GetViaURL(path)
 	dn := models.StripQuotes(models.StripSquareBrackets(cont.Search("imdata", className, "attributes", "dn").String()))
-	return fmt.Sprintf("%s", dn)
+	return fmt.Sprintf("%s", dn), err
 }
 
 // PostAndSetStatus is used to post schema and set the status
@@ -180,11 +213,11 @@ func PostAndSetStatus(d *schema.ResourceData, m interface{}, status string) (*co
 
 	respCont, _, err := aciClient.Do(req)
 	if err != nil {
-		return nil, err
+		return respCont, err
 	}
 	err = client.CheckForErrors(respCont, method, false)
 	if err != nil {
-		return nil, err
+		return respCont, err
 	}
 	return cont, nil
 }
