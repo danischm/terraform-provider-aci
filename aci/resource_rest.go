@@ -63,10 +63,12 @@ func resourceAciRestCreate(d *schema.ResourceData, m interface{}) error {
 	dn := models.StripQuotes(models.StripSquareBrackets(cont.Search(className, "attributes", "dn").String()))
 
 	if dn == "{}" {
-		d.SetId(GetDN(d, m))
-
+		dn, err := GetDN(d, m)
+		if err != nil {
+			return err
+		}
+		d.SetId(dn)
 	} else {
-
 		d.SetId(dn)
 	}
 	return resourceAciRestRead(d, m)
@@ -82,10 +84,12 @@ func resourceAciRestUpdate(d *schema.ResourceData, m interface{}) error {
 	className := classNameIntf.(string)
 	dn := models.StripQuotes(models.StripSquareBrackets(cont.Search(className, "attributes", "dn").String()))
 	if dn == "{}" {
-		d.SetId(GetDN(d, m))
-
+		dn, err := GetDN(d, m)
+		if err != nil {
+			return err
+		}
+		d.SetId(dn)
 	} else {
-
 		d.SetId(dn)
 	}
 
@@ -133,13 +137,13 @@ func resourceAciRestDelete(d *schema.ResourceData, m interface{}) error {
 	return nil
 }
 
-func GetDN(d *schema.ResourceData, m interface{}) string {
+func GetDN(d *schema.ResourceData, m interface{}) (string, error) {
 	aciClient := m.(*client.Client)
 	path := d.Get("path").(string)
 	className := d.Get("class_name").(string)
-	cont, _ := aciClient.GetViaURL(path)
+	cont, err := aciClient.GetViaURL(path)
 	dn := models.StripQuotes(models.StripSquareBrackets(cont.Search("imdata", className, "attributes", "dn").String()))
-	return fmt.Sprintf("%s", dn)
+	return fmt.Sprintf("%s", dn), err
 }
 
 // PostAndSetStatus is used to post schema and set the status
