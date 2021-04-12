@@ -3,7 +3,6 @@ package aci
 import (
 	"errors"
 	"fmt"
-	"log"
 
 	"github.com/ciscoecosystem/aci-go-client/client"
 	"github.com/ciscoecosystem/aci-go-client/container"
@@ -30,14 +29,12 @@ func resourceAciRest() *schema.Resource {
 			"path": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
-				ForceNew: true,
 			},
 			// we set it automatically if file config is provided
 			"class_name": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
 				Computed: true,
-				ForceNew: true,
 			},
 			"content": &schema.Schema{
 				Type:     schema.TypeMap,
@@ -49,16 +46,6 @@ func resourceAciRest() *schema.Resource {
 			},
 			"payload": &schema.Schema{
 				Type:     schema.TypeString,
-				Optional: true,
-			},
-			"managed": &schema.Schema{
-				Type:     schema.TypeBool,
-				Optional: true,
-				Default:  true,
-			},
-			"state_ignore_attributes": &schema.Schema{
-				Type:     schema.TypeSet,
-				Elem:     &schema.Schema{Type: schema.TypeString},
 				Optional: true,
 			},
 		},
@@ -75,12 +62,10 @@ func resourceAciRestCreate(d *schema.ResourceData, m interface{}) error {
 	dn := models.StripQuotes(models.StripSquareBrackets(cont.Search(className, "attributes", "dn").String()))
 
 	if dn == "{}" {
-		dn, err := GetDN(d, m)
-		if err != nil {
-			return err
-		}
-		d.SetId(dn)
+		d.SetId(GetDN(d, m))
+
 	} else {
+
 		d.SetId(dn)
 	}
 	return resourceAciRestRead(d, m)
@@ -96,12 +81,10 @@ func resourceAciRestUpdate(d *schema.ResourceData, m interface{}) error {
 	className := classNameIntf.(string)
 	dn := models.StripQuotes(models.StripSquareBrackets(cont.Search(className, "attributes", "dn").String()))
 	if dn == "{}" {
-		dn, err := GetDN(d, m)
-		if err != nil {
-			return err
-		}
-		d.SetId(dn)
+		d.SetId(GetDN(d, m))
+
 	} else {
+
 		d.SetId(dn)
 	}
 
@@ -109,72 +92,25 @@ func resourceAciRestUpdate(d *schema.ResourceData, m interface{}) error {
 }
 
 func resourceAciRestRead(d *schema.ResourceData, m interface{}) error {
-	if !d.Get("managed").(bool) {
-		return nil
-	}
-
-	log.Printf("[DEBUG] %s: Beginning Read", d.Id())
-
-	if content, ok := d.GetOk("content"); ok {
-		aciClient := m.(*client.Client)
-		path := d.Get("path").(string)
-		className := d.Get("class_name").(string)
-		cont, _ := aciClient.GetViaURL(path)
-
-		ignoreAttr := d.Get("state_ignore_attributes")
-		ignoreAttrList := toStringList(ignoreAttr.(*schema.Set).List())
-
-		if cont.Search("imdata", className) == nil {
-			d.Set("content", make(map[string]interface{}))
-			return nil
-		}
-
-		contentStrMap := toStrMap(content.(map[string]interface{}))
-		newContent := make(map[string]interface{})
-
-		for key, value := range contentStrMap {
-			ignore_found := false
-			for _, ignoreAttr := range ignoreAttrList {
-				if ignoreAttr == key {
-					ignore_found = true
-					break
-				}
-			}
-			if ignore_found {
-				newContent[key] = value
-			} else {
-				newContent[key] = models.StripQuotes(models.StripSquareBrackets(cont.Search("imdata", className, "attributes", key).String()))
-			}
-		}
-		d.Set("content", newContent)
-	}
-
-	log.Printf("[DEBUG] %s: Read finished successfully", d.Id())
-
 	return nil
 }
 
 func resourceAciRestDelete(d *schema.ResourceData, m interface{}) error {
-	cont, err := PostAndSetStatus(d, m, Deleted)
+	_, err := PostAndSetStatus(d, m, Deleted)
 	if err != nil {
-		errCode := models.StripQuotes(models.StripSquareBrackets(cont.Search("imdata", "error", "attributes", "code").String()))
-		// Ignore errors of type "Cannot delete object of class"
-		if errCode == "107" {
-			return nil
-		}
 		return err
 	}
 	d.SetId("")
 	return nil
 }
 
-func GetDN(d *schema.ResourceData, m interface{}) (string, error) {
+func GetDN(d *schema.ResourceData, m interface{}) string {
 	aciClient := m.(*client.Client)
 	path := d.Get("path").(string)
 	className := d.Get("class_name").(string)
-	cont, err := aciClient.GetViaURL(path)
+	cont, _ := aciClient.GetViaURL(path)
 	dn := models.StripQuotes(models.StripSquareBrackets(cont.Search("imdata", className, "attributes", "dn").String()))
-	return fmt.Sprintf("%s", dn), err
+	return fmt.Sprintf("%s", dn)
 }
 
 // PostAndSetStatus is used to post schema and set the status
@@ -244,11 +180,11 @@ func PostAndSetStatus(d *schema.ResourceData, m interface{}, status string) (*co
 
 	respCont, _, err := aciClient.Do(req)
 	if err != nil {
-		return respCont, err
+		return nil, err
 	}
 	err = client.CheckForErrors(respCont, method, false)
 	if err != nil {
-		return respCont, err
+		return nil, err
 	}
 	return cont, nil
 }
