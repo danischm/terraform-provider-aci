@@ -81,12 +81,12 @@ func getAciRestManaged(d *schema.ResourceData, c *container.Container) error {
 
 func resourceAciRestManagedCreate(d *schema.ResourceData, m interface{}) error {
 	for attempts := 0; ; attempts++ {
-		cont, err := RestPost(d, m, "created, modified")
+		cont, err := RestPost(d, m)
 		if err != nil {
 			if attempts >= Retries {
 				return err
 			} else {
-				log.Printf("[ERROR] DSDEBUG Creating resource failed: %s", err)
+				log.Printf("[ERROR] Failed to create object: %s, retries: %v", err, attempts)
 				continue
 			}
 		}
@@ -96,7 +96,7 @@ func resourceAciRestManagedCreate(d *schema.ResourceData, m interface{}) error {
 			if attempts >= Retries {
 				return err
 			} else {
-				log.Printf("[ERROR] DSDEBUG Decoding response after create failed: %s", err)
+				log.Printf("[ERROR] Failed to decode response after creating object: %s, retries: %v", err, attempts)
 				continue
 			}
 		}
@@ -105,35 +105,63 @@ func resourceAciRestManagedCreate(d *schema.ResourceData, m interface{}) error {
 }
 
 func resourceAciRestManagedUpdate(d *schema.ResourceData, m interface{}) error {
-	cont, err := RestPost(d, m, "modified")
-	if err != nil {
-		return err
-	}
+	for attempts := 0; ; attempts++ {
+		cont, err := RestPost(d, m)
+		if err != nil {
+			if attempts >= Retries {
+				return err
+			} else {
+				log.Printf("[ERROR] Failed to update object: %s, retries: %v", err, attempts)
+				continue
+			}
+		}
 
-	err = getAciRestManaged(d, cont)
-	if err != nil {
-		return err
+		err = getAciRestManaged(d, cont)
+		if err != nil {
+			if attempts >= Retries {
+				return err
+			} else {
+				log.Printf("[ERROR] Failed to decode response after updating object: %s, retries: %v", err, attempts)
+				continue
+			}
+		}
+		return nil
 	}
-	return nil
 }
 
 func resourceAciRestManagedRead(d *schema.ResourceData, m interface{}) error {
 	log.Printf("[DEBUG] %s: Beginning Read", d.Id())
 
-	cont, err := RestGet(d, m)
-	if cont == nil && err == nil {
-		d.SetId("")
-		return nil
-	}
-	if err != nil {
-		log.Printf("[DEBUG] DSDEBUG failed RestGet")
-		return err
-	}
+	for attempts := 0; ; attempts++ {
+		cont, err := RestGet(d, m)
+		if err != nil {
+			if attempts >= Retries {
+				return err
+			} else {
+				log.Printf("[ERROR] Failed to read object: %s, retries: %v", err, attempts)
+				continue
+			}
+		}
 
-	err = getAciRestManaged(d, cont)
-	if err != nil {
-		log.Printf("[DEBUG] DSDEBUG failed getAciRestManaged")
-		return err
+		// Check if we received an empty response without errors -> object has been deleted
+		if cont == nil && err == nil {
+			d.SetId("")
+			return nil
+		}
+
+		err = getAciRestManaged(d, cont)
+		if err != nil {
+			if attempts >= Retries {
+				return err
+			} else {
+				log.Printf("[ERROR] Failed to decode response after reading object: %s, retries: %v", err, attempts)
+				continue
+			}
+		}
+
+		if err == nil {
+			break
+		}
 	}
 
 	log.Printf("[DEBUG] %s: Read finished successfully", d.Id())
@@ -151,11 +179,14 @@ func resourceAciRestManagedDelete(d *schema.ResourceData, m interface{}) error {
 	for attempts := 0; ; attempts++ {
 		err = aciClient.DeleteByDn(dn, className)
 		if err != nil && attempts >= Retries {
-			return err
+			if attempts >= Retries {
+				return err
+			} else {
+				log.Printf("[ERROR] Failed to delete object: %s, retries: %v", err, attempts)
+				continue
+			}
 		}
-		if err == nil {
-			break
-		}
+		break
 	}
 
 	log.Printf("[DEBUG] %s: Destroy finished successfully", d.Id())
@@ -189,7 +220,7 @@ func RestGet(d *schema.ResourceData, m interface{}) (*container.Container, error
 	return respCont, nil
 }
 
-func RestPost(d *schema.ResourceData, m interface{}, status string) (*container.Container, error) {
+func RestPost(d *schema.ResourceData, m interface{}) (*container.Container, error) {
 	aciClient := m.(*client.Client)
 	path := getPath(d.Get("dn").(string))
 	var cont *container.Container
@@ -201,9 +232,6 @@ func RestPost(d *schema.ResourceData, m interface{}, status string) (*container.
 
 	className := d.Get("class_name").(string)
 	cont, err = preparePayload(className, contentStrMap)
-	if status == "deleted" {
-		cont.Set(status, className, "attributes", "status")
-	}
 	if err != nil {
 		return nil, err
 	}
