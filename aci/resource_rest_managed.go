@@ -2,6 +2,7 @@ package aci
 
 import (
 	"log"
+	"time"
 
 	"github.com/ciscoecosystem/aci-go-client/client"
 	"github.com/ciscoecosystem/aci-go-client/container"
@@ -9,7 +10,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
 )
 
-const Retries = 2
+const Retries = 3
+const RetryDelay = 30
 
 func resourceAciRestManaged() *schema.Resource {
 	return &schema.Resource{
@@ -45,10 +47,6 @@ func resourceAciRestManaged() *schema.Resource {
 	}
 }
 
-func getPath(dn string) string {
-	return "/api/mo/" + dn + ".json"
-}
-
 func getAciRestManaged(d *schema.ResourceData, c *container.Container) error {
 	className := d.Get("class_name").(string)
 	dn := d.Get("dn").(string)
@@ -81,22 +79,24 @@ func getAciRestManaged(d *schema.ResourceData, c *container.Container) error {
 
 func resourceAciRestManagedCreate(d *schema.ResourceData, m interface{}) error {
 	for attempts := 0; ; attempts++ {
-		cont, err := RestPost(d, m)
+		cont, err := ApicRest(d, m, "POST")
 		if err != nil {
-			if attempts >= Retries {
+			if attempts > Retries {
 				return err
 			} else {
 				log.Printf("[ERROR] Failed to create object: %s, retries: %v", err, attempts)
+				time.Sleep(RetryDelay * time.Second)
 				continue
 			}
 		}
 
 		err = getAciRestManaged(d, cont)
 		if err != nil {
-			if attempts >= Retries {
+			if attempts > Retries {
 				return err
 			} else {
 				log.Printf("[ERROR] Failed to decode response after creating object: %s, retries: %v", err, attempts)
+				time.Sleep(RetryDelay * time.Second)
 				continue
 			}
 		}
@@ -105,40 +105,48 @@ func resourceAciRestManagedCreate(d *schema.ResourceData, m interface{}) error {
 }
 
 func resourceAciRestManagedUpdate(d *schema.ResourceData, m interface{}) error {
+	log.Printf("[DEBUG] %s: Beginning Update", d.Id())
+
 	for attempts := 0; ; attempts++ {
-		cont, err := RestPost(d, m)
+		cont, err := ApicRest(d, m, "POST")
 		if err != nil {
-			if attempts >= Retries {
+			if attempts > Retries {
 				return err
 			} else {
 				log.Printf("[ERROR] Failed to update object: %s, retries: %v", err, attempts)
+				time.Sleep(RetryDelay * time.Second)
 				continue
 			}
 		}
 
 		err = getAciRestManaged(d, cont)
 		if err != nil {
-			if attempts >= Retries {
+			if attempts > Retries {
 				return err
 			} else {
 				log.Printf("[ERROR] Failed to decode response after updating object: %s, retries: %v", err, attempts)
+				time.Sleep(RetryDelay * time.Second)
 				continue
 			}
 		}
-		return nil
+		break
 	}
+
+	log.Printf("[DEBUG] %s: Update finished successfully", d.Id())
+	return nil
 }
 
 func resourceAciRestManagedRead(d *schema.ResourceData, m interface{}) error {
 	log.Printf("[DEBUG] %s: Beginning Read", d.Id())
 
 	for attempts := 0; ; attempts++ {
-		cont, err := RestGet(d, m)
+		cont, err := ApicRest(d, m, "GET")
 		if err != nil {
-			if attempts >= Retries {
+			if attempts > Retries {
 				return err
 			} else {
 				log.Printf("[ERROR] Failed to read object: %s, retries: %v", err, attempts)
+				time.Sleep(RetryDelay * time.Second)
 				continue
 			}
 		}
@@ -151,103 +159,78 @@ func resourceAciRestManagedRead(d *schema.ResourceData, m interface{}) error {
 
 		err = getAciRestManaged(d, cont)
 		if err != nil {
-			if attempts >= Retries {
+			if attempts > Retries {
 				return err
 			} else {
 				log.Printf("[ERROR] Failed to decode response after reading object: %s, retries: %v", err, attempts)
-				continue
-			}
-		}
-
-		if err == nil {
-			break
-		}
-	}
-
-	log.Printf("[DEBUG] %s: Read finished successfully", d.Id())
-
-	return nil
-}
-
-func resourceAciRestManagedDelete(d *schema.ResourceData, m interface{}) error {
-	log.Printf("[DEBUG] %s: Beginning Destroy", d.Id())
-
-	aciClient := m.(*client.Client)
-	dn := d.Id()
-	className := d.Get("class_name").(string)
-	var err error
-	for attempts := 0; ; attempts++ {
-		err = aciClient.DeleteByDn(dn, className)
-		if err != nil && attempts >= Retries {
-			if attempts >= Retries {
-				return err
-			} else {
-				log.Printf("[ERROR] Failed to delete object: %s, retries: %v", err, attempts)
+				time.Sleep(RetryDelay * time.Second)
 				continue
 			}
 		}
 		break
 	}
 
-	log.Printf("[DEBUG] %s: Destroy finished successfully", d.Id())
+	log.Printf("[DEBUG] %s: Read finished successfully", d.Id())
+	return nil
+}
+
+func resourceAciRestManagedDelete(d *schema.ResourceData, m interface{}) error {
+	log.Printf("[DEBUG] %s: Beginning Destroy", d.Id())
+
+	for attempts := 0; ; attempts++ {
+		_, err := ApicRest(d, m, "DELETE")
+		if err != nil && attempts > Retries {
+			if attempts > Retries {
+				return err
+			} else {
+				log.Printf("[ERROR] Failed to delete object: %s, retries: %v", err, attempts)
+				time.Sleep(RetryDelay * time.Second)
+				continue
+			}
+		}
+		break
+	}
 
 	d.SetId("")
-	return err
+	log.Printf("[DEBUG] %s: Destroy finished successfully", d.Id())
+	return nil
 }
 
-func RestGet(d *schema.ResourceData, m interface{}) (*container.Container, error) {
+func ApicRest(d *schema.ResourceData, m interface{}, method string) (*container.Container, error) {
 	aciClient := m.(*client.Client)
-	path := getPath(d.Get("dn").(string))
-
-	req, err := aciClient.MakeRestRequest("GET", path, nil, true)
-	if err != nil {
-		return nil, err
-	}
-
-	respCont, _, err := aciClient.Do(req)
-	if err != nil {
-		return respCont, err
-	}
-
-	if respCont.S("imdata").Index(0).String() == "{}" {
-		return nil, nil
-	}
-
-	err = client.CheckForErrors(respCont, "GET", false)
-	if err != nil {
-		return respCont, err
-	}
-	return respCont, nil
-}
-
-func RestPost(d *schema.ResourceData, m interface{}) (*container.Container, error) {
-	aciClient := m.(*client.Client)
-	path := getPath(d.Get("dn").(string))
-	var cont *container.Container
+	path := "/api/mo/" + d.Get("dn").(string) + ".json"
+	var cont *container.Container = nil
 	var err error
-	method := "POST"
 
-	content := d.Get("content")
-	contentStrMap := toStrMap(content.(map[string]interface{}))
+	if method == "POST" {
+		content := d.Get("content")
+		contentStrMap := toStrMap(content.(map[string]interface{}))
 
-	className := d.Get("class_name").(string)
-	cont, err = preparePayload(className, contentStrMap)
-	if err != nil {
-		return nil, err
+		className := d.Get("class_name").(string)
+		cont, err = preparePayload(className, contentStrMap)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	req, err := aciClient.MakeRestRequest(method, path, cont, true)
 	if err != nil {
 		return nil, err
 	}
-
 	respCont, _, err := aciClient.Do(req)
 	if err != nil {
 		return respCont, err
+	}
+	if respCont.S("imdata").Index(0).String() == "{}" {
+		return nil, nil
 	}
 	err = client.CheckForErrors(respCont, method, false)
 	if err != nil {
 		return respCont, err
 	}
-	return cont, nil
+	if method == "POST" {
+		return cont, nil
+	} else {
+		return respCont, nil
+	}
 }
